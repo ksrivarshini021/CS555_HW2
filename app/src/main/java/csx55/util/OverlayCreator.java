@@ -8,23 +8,19 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 
-import csx55.transport.TCPConnection;
 
 public class OverlayCreator {
     // private final List<String> messagingNodeList;
 
-    //neighbours per each npde
-    private final Map<String, Set<String>> adjList = new HashMap<>(); 
+    // neighbours per each npde
+    private final Map<String, Set<String>> adjList = new HashMap<>();
 
-    //store weights link
-    private final List<Link> LinkWeights = new ArrayList<>(); 
-
-    //list for all 
-    private final List<String> nodes; 
+    // list for all
+    private final List<String> nodes;
 
     public OverlayCreator(List<String> nodes) {
         // this.messagingNodeList = null;
-        this.nodes = new ArrayList<>(nodes); 
+        this.nodes = new ArrayList<>(nodes);
     }
 
     /**
@@ -38,83 +34,33 @@ public class OverlayCreator {
             return false;
         }
 
-        //take note of the adjecent nodes
+        // take note of the adjecent nodes
         for (String node : nodes) {
             adjList.put(node, new HashSet<>());
         }
 
-        //then connect linerly to form a ring
+        // then connect linerly to form a ring
         for (int i = 0; i < numNodes; i++) {
             String nodeA = nodes.get(i);
-            for(int j = 1; j <= connectionsPerNode / 2; j++){
-                String nodeB = nodes.get((i+j) % numNodes);
-                addEdge(nodeA, nodeB);
-
-            }
+            String pred = nodes.get((i - 1 + numNodes) % numNodes);
+            String succ = nodes.get((i + 1) % numNodes);
+            addEdge(nodeA, pred);
+            addEdge(nodeA, succ);
         }
         return true;
     }
 
     /**
      * to check if the edge has already been built
+     * 
      * @param a
      * @param b
      */
     private void addEdge(String a, String b) {
         adjList.get(a).add(b);
         adjList.get(b).add(a);
-
-        int weight = 0;
-        try {
-            final Random random = new Random();
-            weight = random.nextInt(10) + 1;
-        } catch (Exception e) {
-            System.out.println("Error assigning weights");
-            e.printStackTrace();
-        }
-        LinkWeights.add(new Link(a, b, weight));
     }
 
-    public List<Link> getEdgeWeights() {
-        return new ArrayList<>(LinkWeights);
-    }
-
-    public List<String> getConnectionsPerNode(String node) {
-        if (!adjList.containsKey(node)) {
-            return new ArrayList<>();
-        }
-        return new ArrayList<>(adjList.get(node));
-
-    }
-
-    public static class Link {
-        public final String nodeA;
-        public final String nodeB;
-        public final int weight;
-
-        public Link(String nodeA, String nodeB, int weight) {
-            this.nodeA = nodeA;
-            this.nodeB = nodeB;
-            this.weight = weight;
-        }
-
-        @Override
-        public String toString() {
-            return nodeA + "," + nodeB + "," + (weight);
-        }
-
-        public String getNodeA() {
-            return nodeA;
-        }
-
-        public String getNodeB() {
-            return nodeB;
-        }
-
-        public int getWeight() {
-            return weight;
-        }
-    }
 
     public Map<String, Set<String>> getAdjList() {
         return adjList;

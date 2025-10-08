@@ -2,11 +2,9 @@ package csx55.threads;
 
 import java.io.*;
 import java.net.*;
-import java.sql.Connection;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.logging.Logger;
 
 import csx55.transport.TCPConnection;
 import csx55.transport.TCPServerThread;
@@ -20,11 +18,11 @@ public class Registry implements Node {
     // private Registry(){}
     // private ConcurrentHashMap<String, Socket> registeredMessagingNodes = new
     // ConcurrentHashMap<>();
-    private LinkWeights weights = null;
     private final Map<String, TCPConnection> connections = new ConcurrentHashMap<>();
     private final AtomicInteger completedTasks = new AtomicInteger(0);
 
     private int rounds = 0;
+    private int threadPoolSize = 0;
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1) {
@@ -67,20 +65,22 @@ public class Registry implements Node {
 
             // String command = input[0];
             switch (command) {
-                case "list-messaging-nodes":
-                    printingMessagingNodesList();
+                case "list-nodes":
+                    printNodesList();
                     break;
 
                 case "setup-overlay":
-                    int numconnections = 2;
-                    if (input.length > 1) {
-                        try {
-                            numconnections = Integer.parseInt(input[1]);
-                        } catch (NumberFormatException e) {
-                            System.out.println("invalid number for connections");
+                    if(input.length < 2){
+                        System.out.println("provide thread pool size");
+                
+                    } else{
+                        try{
+                            threadPoolSize = Integer.parseInt(input[1]);
+                            setupOverlay();
+                        } catch(IOException e){
+                            System.out.println("invalid thread pool size, should be int");
                         }
                     }
-                    setupOverlay(numconnections);
                     break;
 
                 case "start":
@@ -95,6 +95,19 @@ public class Registry implements Node {
 
     }
 
+    private void printNodesList() {
+        if(connections.isEmpty()){
+            System.out.println("nno nodes");
+            return;
+        }
+
+        System.out.println("Registered nodes" + connections.size());
+        for(String node : connections.keySet()){
+            System.out.println(node);
+        }
+       
+    }
+
     @Override
     public void onEvent(Event event, TCPConnection connection) {
         int type = event.getType();
@@ -102,12 +115,11 @@ public class Registry implements Node {
             case Protocol.REGISTER_REQUEST:
                 handleRegisteration((Register) event, connection, true);
                 // System.out.println("Registry received event type: " + type);
-
                 break;
+                
+            // case Protocol.INITIATE_OVERLAY_SETUP:
+            //     handleSetUpOverlay((OverlaySetup), event);
 
-            case Protocol.DEREGISTER_REQUEST:
-                handleRegisteration((Register) event, connection, false);
-                break;
             case Protocol.TASK_COMPLETE:
                 completedTask();
                 break;
@@ -185,10 +197,6 @@ public class Registry implements Node {
             System.out.println("success");
         }
 
-        try{
-            Thread.sleep(15000);
-        } catch (InterruptedException ie) {}
-
         for (String node : connections.keySet()) {
             TCPConnection connection = connections.get(node);
             try {
@@ -200,18 +208,6 @@ public class Registry implements Node {
         }
     }
 
-
-    private void printingMessagingNodesList() {
-        if (connections.isEmpty()) {
-            System.out.println("No registered messaging nodes");
-            return;
-        }
-
-        System.out.println("Connected nodes" + connections.size());
-        for (String node : connections.keySet()) {
-            System.out.println(node);
-        }
-    }
 
     /**
      * display colelcted sumamry of traffic from all nodes
@@ -228,32 +224,15 @@ public class Registry implements Node {
     // }
     // }
 
-    private void displayLinkWeights() throws IOException {
-        if (weights == null) {
-            if (connections.size() < 2) {
-                System.out.println("need atleast 2 nodes for connections");
-                return;
-            }
-        }
-        for (String link : weights.getLinkStrings()) {
-            System.out.println(link);
-        }
-
-    }
-
-    private void setupOverlay(int connectionsPerNode) throws IOException {
+    private void setupOverlay() throws IOException {
         if (connections.size() < 2) {
             System.out.println("atleast 2 nodes required to create an overlay");
             return;
         }
 
-        if (connectionsPerNode >= connections.size()) {
-            System.out.println("Available messages are less than connections required");
-            return;
-        }
 
         List<String> nodes = new ArrayList<>(connections.keySet());
-        OverlayCreator overlay = new OverlayCreator(nodes, connectionsPerNode);
+        OverlayCreator overlay = new OverlayCreator(nodes);
         boolean buildOverlay = overlay.buildOverlay();
 
         if (!buildOverlay) {
@@ -261,31 +240,29 @@ public class Registry implements Node {
             return;
         }
 
-        /* To Store weights in registry */
-        weights = new LinkWeights(overlay.getEdgeWeights());
-
         for (String node : nodes) {
             Set<String> adj = overlay.getAdjList().get(node);
-            MessagingNodesList message = new MessagingNodesList(new ArrayList<>(adj));
-            connections.get(node).getTCPSenderThread().sendData(message.getBytes());
-        }
-        System.out.println("setup completed with " + weights.getLinkStrings().size() + " connections");
-
-    }
-
-    private void sendLinkWeights() {
-        if (weights == null) {
-            System.out.println("needed to create overlay first");
-            return;
-        }
-        for (TCPConnection connection : connections.values()) {
-            try {
-                connection.getTCPSenderThread().sendData(weights.getBytes());
-            } catch (IOException e) {
-                System.err.println("cannot assign weights to ndoe" + e.getMessage());
+            if(adj == null){
+                adj = new HashSet<>();
             }
+            String[] parts = node.split(":");
+            String host = parts[0];
+            int port = Integer.parseInt(parts[1]);
+            OverlaySetup setup = new OverlaySetup(host, port, new ArrayList<>(), threadPoolSize);
+            TCPConnection connection = connections.get(node);
+            if(connection != null){
+                try{
+                    connection.getTCPSenderThread().sendData(setup.getBytes());
+                } catch(IOException e){
+                    System.err.println("canoot setup overlay" + node + e.getMessage());
+                }
+            } else{
+                System.err.println("cannot connect otnode" + node);
+            }
+            // connections.get(node).getTCPSenderThread().sendData(setup.getBytes());
         }
-        System.out.println("link weights assigned");
+        System.out.println("setup completed with " + nodes.size());
+
     }
 
     private void TaskInitiate(String[] input) {
@@ -293,7 +270,6 @@ public class Registry implements Node {
             System.out.println("need to messaging ndeos to initialte task");
             return;
         }
-        int rounds = 1;
         if (input.length > 1) {
             try {
                 rounds = Integer.parseInt(input[1]);
@@ -357,5 +333,6 @@ public class Registry implements Node {
         // TODO Auto-generated method stub
         throw new UnsupportedOperationException("Unimplemented method 'launchServerSocket'");
     }
+
 
 }

@@ -13,7 +13,7 @@ import java.io.IOException;
  * should be done
  */
 public class TaskInitiate implements Event{
-    private int type;
+    private final int type;
     private int numRounds;
 
     public TaskInitiate(int rounds) {

@@ -27,7 +27,7 @@ public class EventFactory {
         return type; // int
     }
 
-    public Event createEvent(byte[] marshalledBytes) throws IOException {
+    public Event createEvent(byte[] marshalledBytes) throws IOException, ClassNotFoundException {
         int eventType = getType(marshalledBytes);
         return Protocol.getEventType(eventType, marshalledBytes);
     }
