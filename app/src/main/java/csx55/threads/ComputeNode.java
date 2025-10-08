@@ -23,12 +23,13 @@ import csx55.wireformats.OverlaySetup;
 import csx55.wireformats.Protocol;
 import csx55.wireformats.Register;
 import csx55.wireformats.RingMessage;
+import csx55.wireformats.TaskComplete;
 import csx55.wireformats.TaskInitiate;
 import csx55.wireformats.TaskList;
+import csx55.wireformats.TaskSummaryResponse;
 import csx55.wireformats.UpdateStats;
 
 public class ComputeNode implements Node {
-    private TCPConnection Connection;
     private String Host;
     private int Port;
     private ThreadPool pool;
@@ -44,6 +45,8 @@ public class ComputeNode implements Node {
 
     private UpdateStats stats = new UpdateStats();
     private TCPConnection connectToRegistry;
+    boolean taskInProgress = false;
+    boolean sendSummary = false;
 
     public ComputeNode(String host, int port) {
         this.Host = host;
@@ -130,33 +133,46 @@ public class ComputeNode implements Node {
                 // this.ThreadCount = setup.getThreadCount();
                 // this.neighbors = setup.getNeighbours();
 
-                
                 // setUpConnection();
 
                 // pool = new ThreadPool(ThreadCount, 1000, 0);
-                
+
                 break;
 
             case Protocol.TASK_INITIATE:
                 handleTaskInitiate((TaskInitiate) event);
-                
+
                 break;
 
             case Protocol.TASK_LIST:
                 handleTaskList((TaskList) event);
-              
+
                 break;
             case Protocol.RING_MESSAGE:
                 handleRingMessage((RingMessage) event);
-               
+
                 break;
             case Protocol.BALANCING_LOAD:
                 handleLoadBalancing((BalancingLoad) event);
-              
+
+            case Protocol.PULL_TRAFFIC_SUMMARY:
+                handleTrafficSummaryRequest(connection);
+
                 break;
             default:
                 break;
         }
+    }
+
+    private void handleTrafficSummaryRequest(TCPConnection connection) throws IOException {
+        if (!sendSummary) {
+            TaskSummaryResponse response = new TaskSummaryResponse(Host, Port, stats);
+            connection.getTCPSenderThread().sendData(response.getBytes());
+            sendSummary = true;
+            System.out.println("send summary to registry");
+
+        }
+
     }
 
     private void handleOverlaysetUp(OverlaySetup event) {
@@ -165,7 +181,7 @@ public class ComputeNode implements Node {
         handleSetUpConnection();
         this.pool = new ThreadPool(ThreadCount, 1000, 0);
         System.out.println("overlay ste up, thread count is" + ThreadCount);
-        
+
     }
 
     private void handleTaskList(TaskList tasklist) {
@@ -173,18 +189,18 @@ public class ComputeNode implements Node {
         System.out.println("received task" + tasklist.getTasks().size());
     }
 
-    private void handleSetUpConnection(){
-        for(String neighbour : neighbors){
-            if(!peerConnection.containsKey(neighbour)){
+    private void handleSetUpConnection() {
+        for (String neighbour : neighbors) {
+            if (!peerConnection.containsKey(neighbour)) {
                 String[] parts = neighbour.split(":");
                 String host = parts[0];
                 int port = Integer.parseInt(parts[1]);
-                try{
+                try {
                     Socket socket = new Socket(host, port);
                     TCPConnection connection = new TCPConnection(socket, this);
                     connection.start();
                     peerConnection.put(neighbour, connection);
-                } catch(IOException e){
+                } catch (IOException e) {
                     System.err.println("cannot connect to neighbour");
                 }
             }
@@ -194,7 +210,8 @@ public class ComputeNode implements Node {
         System.out.println("neighbours" + this.neighbors);
     }
 
-        private void handleTaskInitiate(TaskInitiate event) throws InterruptedException, IOException {
+    private void handleTaskInitiate(TaskInitiate event) throws InterruptedException, IOException {
+        sendSummary = false;
         this.rounds = event.getNumRounds();
         for (int i = 0; i < rounds; i++) {
             System.out.println("Starting rounds" + (i + 1));
@@ -203,6 +220,13 @@ public class ComputeNode implements Node {
             sendLoadMessage();
             System.out.println("finishes rounds" + (i + 1));
         }
+
+        if (connectToRegistry != null) {
+            TaskComplete complete = new TaskComplete(Host, Port);
+            connectToRegistry.getTCPSenderThread().sendData(complete.getBytes());
+            System.out.println("task completed" + Host + ":" + Port);
+        }
+        // taskInProgress = false;
     }
 
     private void generateTask() {
@@ -212,6 +236,7 @@ public class ComputeNode implements Node {
         int numTask = rand.nextInt(1000) + 1;
 
         currentTasks.clear();
+        stats.updateGeneratedCount(numTask);
         for (int i = 0; i < numTask; i++) {
             Task task = new Task(Host, Port, 1, rand.nextInt(10000));
             currentTasks.add(task);
@@ -224,11 +249,11 @@ public class ComputeNode implements Node {
     private void executeTasks() throws InterruptedException {
         List<Thread> workers = new ArrayList<>();
 
-        /**add tasks for the pool */
-        for(Task task : currentTasks){
-            pool.addTask(task);
+        /** add tasks for the pool */
+        for (Task task : currentTasks) {
+            pool.submit(task);
         }
-        
+
         for (int i = 0; i < ThreadCount; i++) {
             Thread thread = new Thread() {
                 public void run() {
@@ -236,15 +261,16 @@ public class ComputeNode implements Node {
                         Task task = pool.getTasks();
                         if (task == null) {
                             break;
-                        } 
+                        }
                         task.setThreadId();
                         task.setTimestamp();
                         int nonce = 0;
                         int payload = task.getPayload();
-                        for(int j = 0 ; j < 1000 ; j++){
+                        for (int j = 0; j < 1000; j++) {
                             nonce += (payload * j + 1) % 13;
                         }
                         task.setNonce(nonce);
+                        stats.updateCompletedCount();
                     }
                 }
             };
@@ -266,43 +292,43 @@ public class ComputeNode implements Node {
         System.out.println("all tasks balanced for this round");
     }
 
-    private void sendLoadMessage() throws IOException{
+    private void sendLoadMessage() throws IOException {
         List<String> totalNodes = new ArrayList<>(neighbors);
         totalNodes.add(Host + ":" + Port);
         List<Integer> taskCount = new ArrayList<>(Collections.nCopies(totalNodes.size(), 0));
 
         int currentIndex = totalNodes.indexOf(Host + ":" + Port);
-        if(currentIndex >= 0){
+        if (currentIndex >= 0) {
             taskCount.set(currentIndex, currentTasks.size());
         }
 
-        RingMessage message = new RingMessage(totalNodes,  taskCount, Host + ":" + Port);
+        RingMessage message = new RingMessage(totalNodes, taskCount, Host + ":" + Port);
         String nextNode = message.nextNode(Host + ":" + Port);
 
         TCPConnection connection = peerConnection.get(nextNode);
-        if(connection != null){
+        if (connection != null) {
             connection.getTCPSenderThread().sendData(message.getBytes());
             System.out.println(" ring messaging started from" + Host + ":" + Port);
 
         }
     }
 
-    private void handleRingMessage(RingMessage message) throws IOException{
+    private void handleRingMessage(RingMessage message) throws IOException {
         List<String> ringNodes = message.getRingNodes();
         List<Integer> counts = message.getTaskCounts();
 
         int currentIndex = ringNodes.indexOf(Host + ":" + Port);
-        if(currentIndex != -1){
+        if (currentIndex != -1) {
             counts.set(currentIndex, currentTasks.size());
         }
 
-        if(message.getTaskNode().equals(Host + ":" + Port)){
+        if (message.getTaskNode().equals(Host + ":" + Port)) {
             System.out.println("circled tasks and returned to origin, starting oad balancing");
             executeLoadBalancing(ringNodes, counts);
-        } else{
+        } else {
             String nextNode = message.nextNode(Host + ":" + Port);
             TCPConnection connection = peerConnection.get(nextNode);
-            if(connection != null){
+            if (connection != null) {
                 connection.getTCPSenderThread().sendData(message.getBytes());
                 System.out.println("Forwarded message to" + nextNode);
             }
@@ -311,82 +337,84 @@ public class ComputeNode implements Node {
 
     private void executeLoadBalancing(List<String> ringNodes, List<Integer> counts) throws IOException {
         int totalTasks = 0;
-        for(int i : counts){
+        for (int i : counts) {
             totalTasks += i;
         }
         int idealLoad = totalTasks / ringNodes.size();
         int currentLoad = currentTasks.size();
         System.out.println("Total" + totalTasks + "but ideal load" + idealLoad);
 
-        for (int i = 0 ; i < ringNodes.size() ; i++){
+        for (int i = 0; i < ringNodes.size(); i++) {
             String node = ringNodes.get(i);
             int load = counts.get(i);
-            if(node.equals(Host + ":" + Port)) continue;
+            if (node.equals(Host + ":" + Port))
+                continue;
 
-            if(currentLoad > idealLoad + 10 && load < idealLoad - 10){
+            if (currentLoad > idealLoad + 10 && load < idealLoad - 10) {
                 pushTasks(node, Math.min(10, currentLoad - idealLoad));
-            } else if (currentLoad < idealLoad - 10 && load > idealLoad + 10){
-                pullTasks(node, Math.min(10, idealLoad -  currentLoad));
+            } else if (currentLoad < idealLoad - 10 && load > idealLoad + 10) {
+                pullTasks(node, Math.min(10, idealLoad - currentLoad));
 
             }
         }
     }
-    
 
-    private void pullTasks(String sourceNode, int count) throws IOException{
+    private void pullTasks(String sourceNode, int count) throws IOException {
         TaskList requested = new TaskList(count, Host + ":" + Port);
         TCPConnection connection = peerConnection.get(sourceNode);
-        if(connection != null){
+        if (connection != null) {
             connection.getTCPSenderThread().sendData(requested.getBytes());
         }
+        stats.updatePullCount();
         System.out.println("Requested taskes" + count + "from" + sourceNode);
 
     }
 
-    private void pushTasks(String targetNode, int count) throws IOException{
+    private void pushTasks(String targetNode, int count) throws IOException {
         List<Task> send = new ArrayList<>();
-        for(int i = 0 ; i < count && i < currentTasks.size(); i ++){
+        for (int i = 0; i < count && i < currentTasks.size(); i++) {
             send.add(currentTasks.remove(0));
 
         }
         TaskList list = new TaskList(send);
         TCPConnection connection = peerConnection.get(targetNode);
-        if(connection != null){
+        if (connection != null) {
             connection.getTCPSenderThread().sendData(list.getBytes());
+            stats.updatePushCount();
             System.out.println("Pushed" + send.size() + "tasks to node" + targetNode);
         }
-        
+
     }
 
     private void handleLoadBalancing(BalancingLoad load) throws IOException {
         List<String> loadList = load.getLoadList();
         int currentLoad = currentTasks.size();
 
-        for(String string : loadList){
+        for (String string : loadList) {
             String[] parts = string.split(":");
-            if(parts.length < 3) continue;
+            if (parts.length < 3)
+                continue;
 
             String node = parts[0] + ":" + parts[1];
             int otherLoad = Integer.parseInt(parts[2]);
 
-            if(node.equals(Host + ":" + Port)){
+            if (node.equals(Host + ":" + Port)) {
                 continue;
             }
 
-            if(currentLoad > otherLoad + 10){
+            if (currentLoad > otherLoad + 10) {
                 pushTasks(node, Math.min(10, currentLoad - otherLoad));
-            } else if (currentLoad < otherLoad - 10){
+            } else if (currentLoad < otherLoad - 10) {
                 pullTasks(node, Math.min(10, otherLoad - currentLoad));
             }
         }
-        
+
     }
 
     @Override
     public void processArgs() throws Exception {
 
     }
-
 
     @Override
     public void launchServerSocket(int portNum) throws IOException {

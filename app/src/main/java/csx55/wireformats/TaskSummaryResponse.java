@@ -10,7 +10,7 @@ import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class TaskSummaryResponse implements Event {
-    private final int type = Protocol.TASK_COMPLETE;
+    private final int type = Protocol.TRAFFIC_SUMMARY;
     private String nodeHost;
     private int nodePort;
     private int generatedTotalTasks;
@@ -110,11 +110,25 @@ public class TaskSummaryResponse implements Event {
         return type;
     }
 
+    public int getGeneratedTasks(){
+        return generatedTotalTasks;
+    }
+
+    public int getPulledTasks(){
+        return pulledTotalTasks;
+    }
+
+    public int getPushedTasks(){
+        return pushedTotalTasks;
+    }
+
+    public int getCompletedTasks(){
+        return completedTotalTasks;
+    }
+
     public String toString() {
-        return String.format("%1$-25s %2$-25s %3$-25s %4$-25s %5$-25s %6$-25s",
-                nodeHost + ":" + Integer.toString(nodePort), Integer.toString(generatedTotalTasks),
-                Integer.toString(pulledTotalTasks), Integer.toString(pushedTotalTasks),
-                Integer.toString(completedTotalTasks), Double.toString(completedTotalTasks));
+        return String.format("%1$-20s %2$-25s %3$-25s %4$-25s %5$-25s %6$-25s",
+                nodeHost + ":" + nodePort, generatedTotalTasks, pulledTotalTasks, pushedTotalTasks, completedTotalTasks);
     }
 
 }

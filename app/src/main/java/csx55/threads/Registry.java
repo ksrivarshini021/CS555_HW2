@@ -23,6 +23,8 @@ public class Registry implements Node {
 
     private int rounds = 0;
     private int threadPoolSize = 0;
+    private final List<TaskSummaryResponse> summaries = new ArrayList<>();
+    private boolean taskInProgres = false;
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1) {
@@ -70,14 +72,14 @@ public class Registry implements Node {
                     break;
 
                 case "setup-overlay":
-                    if(input.length < 2){
+                    if (input.length < 2) {
                         System.out.println("provide thread pool size");
-                
-                    } else{
-                        try{
+
+                    } else {
+                        try {
                             threadPoolSize = Integer.parseInt(input[1]);
                             setupOverlay();
-                        } catch(IOException e){
+                        } catch (IOException e) {
                             System.out.println("invalid thread pool size, should be int");
                         }
                     }
@@ -96,16 +98,16 @@ public class Registry implements Node {
     }
 
     private void printNodesList() {
-        if(connections.isEmpty()){
+        if (connections.isEmpty()) {
             System.out.println("nno nodes");
             return;
         }
 
         System.out.println("Registered nodes" + connections.size());
-        for(String node : connections.keySet()){
+        for (String node : connections.keySet()) {
             System.out.println(node);
         }
-       
+
     }
 
     @Override
@@ -116,12 +118,16 @@ public class Registry implements Node {
                 handleRegisteration((Register) event, connection, true);
                 // System.out.println("Registry received event type: " + type);
                 break;
-                
+
             // case Protocol.INITIATE_OVERLAY_SETUP:
-            //     handleSetUpOverlay((OverlaySetup), event);
+            // handleSetUpOverlay((OverlaySetup), event);
 
             case Protocol.TASK_COMPLETE:
                 completedTask();
+                break;
+
+            case Protocol.TRAFFIC_SUMMARY:
+                handleTrafficSummaryResponse((TaskSummaryResponse) event);
                 break;
 
             default:
@@ -130,6 +136,57 @@ public class Registry implements Node {
         }
 
     }
+
+    private synchronized void handleTrafficSummaryResponse(TaskSummaryResponse event) {
+        summaries.add(event);
+        /**
+         * should check if all nodes have responded
+         */
+        if (summaries.size() == connections.size()) {
+            printSummary();
+            summaries.clear();
+        }
+    }
+
+    private void printSummary() {
+        int totalGenerated = 0;
+        int totalPulled = 0;
+        int totalPushed = 0;
+        int totalCompleted = 0;
+        double totalPercentage = 0.0;
+        System.out.println(String.format("%-20s %-15s %-15s %-15s %-15s %-15s", "Node", "GeenratedTasks",
+                "PulledTasks", "pushedTasks", "Completed", "Percentage"));
+
+        for (TaskSummaryResponse event : summaries) {
+            totalGenerated += event.getGeneratedTasks();
+            totalPulled += event.getPulledTasks();
+            totalPushed += event.getPushedTasks();
+            totalCompleted += event.getCompletedTasks();
+        }
+
+
+        for (TaskSummaryResponse event : summaries) {
+            double percentage;
+            if (totalCompleted > 0) {
+                percentage = (event.getCompletedTasks() * 100.0) / totalCompleted;
+            } else {
+                percentage = 0.0;
+            }
+            totalPercentage += percentage;
+
+            System.out.println(String.format("%-20s %-15d %-15d %-15d %-15d %-15.2f",
+                    event.getHost() + ":" + event.getPort(), event.getGeneratedTasks(), event.getPulledTasks(),
+                    event.getPushedTasks(), event.getCompletedTasks(), percentage));
+
+        }
+
+        System.out.println(String.format("%-20s %-15s %-15s %-15s %-15s %-15.2f%n", "Total", totalGenerated,
+                totalPulled, totalPushed, totalCompleted, totalPercentage));
+
+        summaries.clear();
+    }
+
+    
 
     /**
      * To register or de-register messaging node
@@ -187,15 +244,21 @@ public class Registry implements Node {
         /**
          * shoudl wait for all nodes first
          */
-        if(completedTask != connections.size()){
+        if (completedTask != connections.size()) {
+            taskInProgres = true;
             return;
         }
-        completedTasks.set(0);
-        if (rounds > 0) {
-            System.out.println(rounds + " rounds completed");
-        } else {
-            System.out.println("success");
+        if (!taskInProgres) {
+            if (rounds > 0) {
+                System.out.println(rounds + " rounds completed");
+            } else {
+                System.out.println("success");
+            }
+
         }
+
+        completedTasks.set(0);
+        taskInProgres = false;
 
         for (String node : connections.keySet()) {
             TCPConnection connection = connections.get(node);
@@ -208,7 +271,6 @@ public class Registry implements Node {
         }
     }
 
-
     /**
      * display colelcted sumamry of traffic from all nodes
      * 
@@ -216,11 +278,11 @@ public class Registry implements Node {
      * @throws IOException
      */
     // private void TrafficSummary(TaskSummaryResponse event) {
-    // summary.add(event);
-    // if(summary.size() == connections.size()){
+    // summaries.add(event);
+    // if(summaries.size() == connections.size()){
     // System.out.println("summary collected form all nodes");
-    // summary.forEach(System.out::println);
-    // summary.clear();
+    // summaries.forEach(System.out::println);
+    // summaries.clear();
     // }
     // }
 
@@ -229,7 +291,6 @@ public class Registry implements Node {
             System.out.println("atleast 2 nodes required to create an overlay");
             return;
         }
-
 
         List<String> nodes = new ArrayList<>(connections.keySet());
         OverlayCreator overlay = new OverlayCreator(nodes);
@@ -242,21 +303,21 @@ public class Registry implements Node {
 
         for (String node : nodes) {
             Set<String> adj = overlay.getAdjList().get(node);
-            if(adj == null){
+            if (adj == null) {
                 adj = new HashSet<>();
             }
             String[] parts = node.split(":");
             String host = parts[0];
             int port = Integer.parseInt(parts[1]);
-            OverlaySetup setup = new OverlaySetup(host, port, new ArrayList<>(), threadPoolSize);
+            OverlaySetup setup = new OverlaySetup(host, port, new ArrayList<>(adj), threadPoolSize);
             TCPConnection connection = connections.get(node);
-            if(connection != null){
-                try{
+            if (connection != null) {
+                try {
                     connection.getTCPSenderThread().sendData(setup.getBytes());
-                } catch(IOException e){
+                } catch (IOException e) {
                     System.err.println("canoot setup overlay" + node + e.getMessage());
                 }
-            } else{
+            } else {
                 System.err.println("cannot connect otnode" + node);
             }
             // connections.get(node).getTCPSenderThread().sendData(setup.getBytes());
@@ -333,6 +394,5 @@ public class Registry implements Node {
         // TODO Auto-generated method stub
         throw new UnsupportedOperationException("Unimplemented method 'launchServerSocket'");
     }
-
 
 }

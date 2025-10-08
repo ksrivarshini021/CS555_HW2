@@ -60,15 +60,23 @@ public class TaskList implements Event {
          */
         int taskNo = datain.readInt();
         this.tasks = new ArrayList<>();
-        ObjectInputStream object = new ObjectInputStream(datain);
         for(int i = 0 ; i < taskNo; i++){
-            // int taskLength = datain.readInt();
-            // byte[] taskBytes = new byte[taskLength];
-            // datain.readFully(taskBytes);
+            int taskLength = datain.readInt();
+            byte[] taskBytes = new byte[taskLength];
+            datain.readFully(taskBytes);
+
+            String taskString = new String(taskBytes);
+            String[] parts = taskString.split(":");
+            if(parts.length < 4) continue;
+
+            String host = parts[0];
+            int port = Integer.parseInt(parts[1]);
+            int roundNumber = Integer.parseInt(parts[2]);
+            int load = Integer.parseInt(parts[3]);
            
-            Task task = (Task) object.readObject();
+            Task task = new Task(host, port, roundNumber, load);
             // task.unmarshal(taskBytes);
-            tasks.add(task);
+            this.tasks.add(task);
 
         }
         datain.close();
@@ -94,11 +102,11 @@ public class TaskList implements Event {
         dataout.write(requestingNodeBytes);
         dataout.writeInt(tasks.size());
 
-        ObjectOutputStream object = new ObjectOutputStream(dataout);
         for(Task task : tasks){
-            object.writeObject(task);
+            byte[] taskBytes = task.toBytes();
+            dataout.writeInt(taskBytes.length);
+            dataout.write(taskBytes);
         }
-        object.flush();
 
         dataout.flush();
         byte[] marshalledBytes = byteout.toByteArray();

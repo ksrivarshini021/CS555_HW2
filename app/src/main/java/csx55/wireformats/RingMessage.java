@@ -86,9 +86,6 @@ public class RingMessage implements Event {
         
     }
 
-    public RingMessage() {
-        //TODO Auto-generated constructor stub
-    }
 
     @Override
     public int getType() {
